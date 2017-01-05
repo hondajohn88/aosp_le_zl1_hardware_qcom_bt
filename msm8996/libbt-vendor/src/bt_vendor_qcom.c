@@ -37,7 +37,9 @@
 #include <sys/socket.h>
 #include <cutils/sockets.h>
 #include <linux/un.h>
+#ifdef BT_NV_SUPPORT
 #include "bt_vendor_persist.h"
+#endif
 #include "hw_rome.h"
 #include "bt_vendor_lib.h"
 #define WAIT_TIMEOUT 200000
@@ -52,7 +54,6 @@
 #define CMD_TIMEOUT  0x22
 
 static void wait_for_patch_download(bool is_ant_req);
-static bool is_debug_force_special_bytes(void);
 
 /******************************************************************************
 **  Externs
@@ -86,6 +87,8 @@ int userial_vendor_get_baud(void);
 int readTrpState();
 void lpm_set_ar3k(uint8_t pio, uint8_t action, uint8_t polarity);
 
+pthread_mutex_t m_lock = PTHREAD_MUTEX_INITIALIZER;
+
 static const tUSERIAL_CFG userial_init_cfg =
 {
     (USERIAL_DATABITS_8 | USERIAL_PARITY_NONE | USERIAL_STOPBITS_1),
@@ -115,6 +118,16 @@ bool is_soc_initialized(void);
 /******************************************************************************
 **  Local type definitions
 ******************************************************************************/
+
+/******************************************************************************
+**  TODO: Cleanup to use header file. Declare externally used functions.
+******************************************************************************/
+int readTrpState();
+int ath3k_init(int fd, int speed, int init_speed, char *bdaddr, struct termios *ti);
+int userial_clock_operation(int fd, int cmd);
+int rome_soc_init(int fd, char *bdaddr);
+void lpm_set_ar3k(uint8_t pio, uint8_t action, uint8_t polarity);
+int userial_vendor_get_baud(void);
 
 
 /******************************************************************************
@@ -205,7 +218,7 @@ static int get_bt_soc_type()
     ALOGI("bt-vendor : get_bt_soc_type");
 
     ret = property_get("qcom.bluetooth.soc", bt_soc_type, NULL);
-    if (ret >= 0) {
+    if (ret != 0) {
         ALOGI("qcom.bluetooth.soc set to %s\n", bt_soc_type);
         if (!strncasecmp(bt_soc_type, "rome", sizeof("rome"))) {
             return BT_SOC_ROME;
@@ -681,7 +694,15 @@ static int op(bt_vendor_opcode_t opcode, void *param)
                     case BT_SOC_ROME:
                     case BT_SOC_AR3K:
                         /* BT Chipset Power Control through Device Tree Node */
-                        retval = bt_powerup(nState);
+                        if(!pthread_mutex_lock(&m_lock)) {
+                            if(nState == BT_VND_PWR_ON && property_get_bool("wc_transport.vnd_power", 0)) {
+                                bt_powerup(BT_VND_PWR_OFF);
+                            }
+                            retval = bt_powerup(nState);
+                            if(retval == 0)
+                                property_set("wc_transport.vnd_power", nState == BT_VND_PWR_ON ? "1" : "0");
+                            pthread_mutex_unlock(&m_lock);
+                        }
                     default:
                         break;
                 }
@@ -754,11 +775,12 @@ static int op(bt_vendor_opcode_t opcode, void *param)
                         break;
                     case BT_SOC_AR3K:
                         {
+                            int idx;
                             fd = userial_vendor_open((tUSERIAL_CFG *) &userial_init_cfg);
                             if (fd != -1) {
                                 for (idx=0; idx < CH_MAX; idx++)
                                     (*fd_array)[idx] = fd;
-                                     retval = 1;
+                                retval = 1;
                             }
                             else {
                                 retval = -1;
@@ -843,7 +865,7 @@ static int op(bt_vendor_opcode_t opcode, void *param)
                                        /* Since the BD address is configured in boot time We should not be here */
                                        ALOGI("Failed to read BD address. Use the one from bluedroid stack/ftm");
                                     }
-#endif
+#endif //BT_NV_SUPPORT
                                     if(rome_soc_init(fd, (char*)vnd_local_bd_addr)<0) {
                                         retval = -1;
                                     } else {
@@ -917,11 +939,14 @@ static int op(bt_vendor_opcode_t opcode, void *param)
         case BT_VND_OP_ANT_USERIAL_CLOSE:
             {
                 ALOGI("bt-vendor : BT_VND_OP_ANT_USERIAL_CLOSE");
-                property_set("wc_transport.clean_up","1");
-                if (ant_fd != -1) {
-                    ALOGE("closing ant_fd");
-                    close(ant_fd);
-                    ant_fd = -1;
+                if(!pthread_mutex_lock(&m_lock)) {
+                    property_set("wc_transport.clean_up","1");
+                    if (ant_fd != -1) {
+                        ALOGE("closing ant_fd");
+                        close(ant_fd);
+                        ant_fd = -1;
+                    }
+                    pthread_mutex_unlock(&m_lock);
                 }
             }
             break;
@@ -938,8 +963,11 @@ static int op(bt_vendor_opcode_t opcode, void *param)
 
                      case BT_SOC_ROME:
                      case BT_SOC_AR3K:
-                        property_set("wc_transport.clean_up","1");
-                        userial_vendor_close();
+                        if(!pthread_mutex_lock(&m_lock)) {
+                            property_set("wc_transport.clean_up","1");
+                            userial_vendor_close();
+                            pthread_mutex_unlock(&m_lock);
+                        }
                         break;
                     default:
                         ALOGE("Unknown btSocType: 0x%x", btSocType);
@@ -1096,19 +1124,13 @@ static void ssr_cleanup(int reason) {
             trig_ssr = 0xEE;
             ret = write (vnd_userial.fd, &trig_ssr, 1);
             ALOGI("Trig_ssr is being sent to BT socket, retval(%d) :errno:  %s", ret, strerror(errno));
-
-            if (is_debug_force_special_bytes()) {
-                //Then we should send special byte to crash SOC in WCNSS_Filter, so we do not
-                //need to power off UART here.
-                return;
-            }
+            return;
         }
-
         /*Close both ANT channel*/
         op(BT_VND_OP_ANT_USERIAL_CLOSE, NULL);
 #endif
 #endif
-        /*Close both BT channel*/
+        /*Close both ANT channel*/
         op(BT_VND_OP_USERIAL_CLOSE, NULL);
         /*CTRL OFF twice to make sure hw
          * turns off*/
@@ -1128,7 +1150,10 @@ static void ssr_cleanup(int reason) {
 static void cleanup( void )
 {
     ALOGI("cleanup");
-    bt_vendor_cbacks = NULL;
+    if(!pthread_mutex_lock(&m_lock)) {
+        bt_vendor_cbacks = NULL;
+        pthread_mutex_unlock(&m_lock);
+    }
 
 #ifdef WIFI_BT_STATUS_SYNC
     isInit = 0;
@@ -1157,22 +1182,6 @@ void wait_for_patch_download(bool is_ant_req) {
            break;
         }
     }
-}
-
-static bool is_debug_force_special_bytes() {
-    int ret = 0;
-    char value[PROPERTY_VALUE_MAX] = {'\0'};
-    bool enabled = false;
-
-    ret = property_get("wc_transport.force_special_byte", value, NULL);
-
-    if (ret) {
-        enabled = (strcmp(value, "false") ==0) ? false : true;
-        ALOGV("%s: wc_transport.force_special_byte: %s, enabled: %d ",
-            __func__, value, enabled);
-    }
-
-    return enabled;
 }
 
 // Entry point of DLib

@@ -20,6 +20,7 @@ ifeq ($(BOARD_HAVE_BLUETOOTH_QCOM),true)
 
 include $(CLEAR_VARS)
 
+BDROID_DIR:= system/bt
 
 LOCAL_SRC_FILES := \
         src/bt_vendor_qcom.c \
@@ -27,8 +28,10 @@ LOCAL_SRC_FILES := \
         src/hci_uart.c \
         src/hci_smd.c \
         src/hw_rome.c \
-        src/hw_ar3k.c \
-        src/bt_vendor_persist.cpp
+        src/hw_ar3k.c
+
+# if read from bt nv
+#        src/bt_vendor_persist.cpp
 
 ifeq ($(QCOM_BT_USE_SIBS),true)
 LOCAL_CFLAGS += -DQCOM_BT_SIBS_ENABLE
@@ -61,8 +64,12 @@ LOCAL_SHARED_LIBRARIES := \
         libcutils \
         liblog
 
+
+# if read from bt nv
+#        libbtnv
+#LOCAL_CFLAGS += -DBT_NV_SUPPORT
+
 LOCAL_MODULE := libbt-vendor
-LOCAL_CLANG := false
 LOCAL_MODULE_TAGS := optional
 LOCAL_MODULE_CLASS := SHARED_LIBRARIES
 LOCAL_MODULE_OWNER := qcom
@@ -72,16 +79,6 @@ LOCAL_MODULE_PATH_32 := $(TARGET_OUT_VENDOR)/lib
 LOCAL_MODULE_PATH_64 := $(TARGET_OUT_VENDOR)/lib64
 else
 LOCAL_MODULE_PATH := $(TARGET_OUT_VENDOR_SHARED_LIBRARIES)
-endif
-
-ifeq ($(QCOM_BT_USE_BTNV),true)
-LOCAL_CFLAGS += -DBT_NV_SUPPORT
-ifeq ($(QCPATH),)
-LOCAL_SHARED_LIBRARIES += libdl
-LOCAL_CFLAGS += -DBT_NV_SUPPORT_DL
-else
-LOCAL_SHARED_LIBRARIES += libbtnv
-endif
 endif
 
 ifneq ($(BOARD_ANT_WIRELESS_DEVICE),)

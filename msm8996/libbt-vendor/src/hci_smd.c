@@ -29,6 +29,8 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <stdio.h>
+#include <string.h>
+#include <cutils/properties.h>
 #include "bt_vendor_qcom.h"
 #include "hci_smd.h"
 #include <string.h>
@@ -141,16 +143,16 @@ int bt_hci_init_transport_id (int chId )
 
 int bt_hci_init_transport(int *pFd)
 {
-  int i = 0;
-  int fd;
-  for(i=0; i < NUM_OF_DEVS; i++){
-    fd = bt_hci_init_transport_id(i);
-    if(fd < 0 ){
-      return -1;
+    int i = 0;
+    int fd;
+    for(i=0; i < NUM_OF_DEVS; i++){
+       fd = bt_hci_init_transport_id(i);
+       if(fd < 0 ){
+          return -1;
+       }
+       pFd[i] = fd;
     }
-    pFd[i] = fd;
-   }
-   return 0;
+    return 0;
 }
 
 int bt_hci_deinit_transport(int *pFd)

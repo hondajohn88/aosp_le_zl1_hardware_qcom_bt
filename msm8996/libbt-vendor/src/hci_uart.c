@@ -31,6 +31,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <stdio.h>
+#include <string.h>
 #include "bt_vendor_qcom.h"
 #include "hci_uart.h"
 #include <string.h>
